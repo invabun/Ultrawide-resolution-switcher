@@ -1,45 +1,100 @@
 param(
     [switch]$SetupOnly
 )
+# Unified one-click script: toggles between 5120x1440 and 2560x1440 silently.
+#
+# v2 - resolution is read and set through the Win32 display API directly.
+# The old version asked System.Windows.Forms for the current resolution and
+# shelled out to NirCmd to change it. Screen.Bounds returns DPI-scaled logical
+# pixels, so on a machine with display scaling at 125% a real 5120x1440 desktop
+# reports as 4096x1152. Neither branch of the toggle matched, every run fell
+# through to the 2560x1440 default, and switching back was impossible.
+# EnumDisplaySettings reports real pixels regardless of scaling, and it also
+# drops the NirCmd dependency entirely.
 
-# Unified one-click script: first run downloads NirCmd and creates a desktop shortcut,
-# subsequent runs toggle between 5120x1440 and 2560x1440 silently.
+$WideWidth  = 5120
+$WideHeight = 1440
+$NarrowWidth  = 2560
+$NarrowHeight = 1440
 
-function Get-ExeDirectory {
+$AppName = "Dota2ResolutionSwitcher"
+
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class Disp {
+  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Ansi)]
+  public struct DEVMODE {
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string dmDeviceName;
+    public short dmSpecVersion; public short dmDriverVersion; public short dmSize; public short dmDriverExtra;
+    public int dmFields;
+    public int dmPositionX; public int dmPositionY; public int dmDisplayOrientation; public int dmDisplayFixedOutput;
+    public short dmColor; public short dmDuplex; public short dmYResolution; public short dmTTOption; public short dmCollate;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string dmFormName;
+    public short dmLogPixels; public int dmBitsPerPel; public int dmPelsWidth; public int dmPelsHeight;
+    public int dmDisplayFlags; public int dmDisplayFrequency;
+    public int dmICMMethod; public int dmICMIntent; public int dmMediaType; public int dmDitherType;
+    public int dmReserved1; public int dmReserved2; public int dmPanningWidth; public int dmPanningHeight;
+  }
+  public static DEVMODE Create() {
+    DEVMODE dm = new DEVMODE();
+    dm.dmDeviceName = ""; dm.dmFormName = "";
+    dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
+    return dm;
+  }
+  [DllImport("user32.dll", CharSet=CharSet.Ansi)]
+  public static extern bool EnumDisplaySettings(string dev, int mode, ref DEVMODE dm);
+  [DllImport("user32.dll", CharSet=CharSet.Ansi)]
+  public static extern int ChangeDisplaySettings(ref DEVMODE dm, int flags);
+}
+"@
+
+$ENUM_CURRENT_SETTINGS = -1
+$DM_BITSPERPEL = 0x40000; $DM_PELSWIDTH = 0x80000
+$DM_PELSHEIGHT = 0x100000; $DM_DISPLAYFREQUENCY = 0x400000
+$CDS_UPDATEREGISTRY = 0x01
+$CDS_TEST = 0x02
+
+function Show-Msg($text) {
     try {
-        $path = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
-        return [System.IO.Path]::GetDirectoryName($path)
+        Add-Type -AssemblyName PresentationFramework
+        [System.Windows.MessageBox]::Show($text, "Dota2 Resolution Switcher") | Out-Null
     } catch {
-        return $PSScriptRoot
+        Write-Host $text
     }
 }
 
-$AppName = "Dota2ResolutionSwitcher"
-$UserDataDir = Join-Path $env:LOCALAPPDATA $AppName
-$null = New-Item -ItemType Directory -Path $UserDataDir -Force | Out-Null
-
-$ExeDir = Get-ExeDirectory
-$nircmdLocal = Join-Path $ExeDir "nircmd.exe"
-$nircmdData = Join-Path $UserDataDir "nircmd.exe"
-$nircmdPath = if (Test-Path $nircmdLocal) { $nircmdLocal } elseif (Test-Path $nircmdData) { $nircmdData } else { $nircmdData }
-
-function Ensure-NirCmd {
-    if (Test-Path $nircmdPath) { return $true }
-    $zipUrl = "https://www.nirsoft.net/utils/nircmd.zip"
-    $zipFile = Join-Path $UserDataDir "nircmd.zip"
+# EnumDisplaySettings needs an explicit device name; passing $null from
+# PowerShell does not marshal through as NULL. Only the NAME is taken from
+# Forms here - never Bounds, which is the DPI-scaled value that caused the bug.
+function Get-PrimaryDevice {
     try {
-        Invoke-WebRequest -Uri $zipUrl -OutFile $zipFile -UseBasicParsing
-        try {
-            Expand-Archive -Path $zipFile -DestinationPath $UserDataDir -Force
-        } catch {
-            Add-Type -AssemblyName System.IO.Compression.FileSystem
-            [System.IO.Compression.ZipFile]::ExtractToDirectory($zipFile, $UserDataDir)
-        }
-        Remove-Item $zipFile -Force -ErrorAction SilentlyContinue
-        return (Test-Path $nircmdPath)
-    } catch {
-        return $false
+        Add-Type -AssemblyName System.Windows.Forms
+        $n = [System.Windows.Forms.Screen]::PrimaryScreen.DeviceName
+        if ($n) { return $n }
+    } catch {}
+    return ("{0}{0}.{0}DISPLAY1" -f [char]92)
+}
+
+$Device = Get-PrimaryDevice
+
+function Get-CurrentMode {
+    $dm = [Disp]::Create()
+    if (-not [Disp]::EnumDisplaySettings($Device, $ENUM_CURRENT_SETTINGS, [ref]$dm)) {
+        throw "Could not read the current display mode."
     }
+    return $dm
+}
+
+function Get-ModesFor([int]$w, [int]$h) {
+    $out = @(); $i = 0
+    while ($true) {
+        $dm = [Disp]::Create()
+        if (-not [Disp]::EnumDisplaySettings($Device, $i, [ref]$dm)) { break }
+        if ($dm.dmPelsWidth -eq $w -and $dm.dmPelsHeight -eq $h -and $dm.dmBitsPerPel -eq 32) { $out += $dm }
+        $i++
+    }
+    return $out
 }
 
 function Create-DesktopShortcut {
@@ -47,94 +102,86 @@ function Create-DesktopShortcut {
         $shell = New-Object -ComObject WScript.Shell
         $desktop = [Environment]::GetFolderPath("Desktop")
         $shortcutPath = Join-Path $desktop "Dota2 Resolution Switcher.lnk"
-        $target = Join-Path $ExeDir (Split-Path -Leaf $PSCommandPath)
-        $isExe = $target.ToLower().EndsWith('.exe')
-        if (-not $isExe) { $target = $PSCommandPath }
-        $sc = $shell.CreateShortcut($shortcutPath)
-        $sc.TargetPath = $target
-        $sc.WorkingDirectory = $ExeDir
-        $sc.Arguments = ""
-        $sc.IconLocation = $target
+
+        try {
+            $target = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+        } catch {
+            $target = $null
+        }
+        # When running as the packaged EXE the shortcut points at the EXE itself.
+        # When running as a loose .ps1 the host is powershell.exe, so point the
+        # shortcut at PowerShell and pass the script path as an argument.
+        if ($target -and $target.ToLower().EndsWith('.exe') -and
+            -not $target.ToLower().EndsWith('powershell.exe')) {
+            $sc = $shell.CreateShortcut($shortcutPath)
+            $sc.TargetPath = $target
+            $sc.Arguments = ""
+            $sc.WorkingDirectory = Split-Path -Parent $target
+            $sc.IconLocation = $target
+        } else {
+            $sc = $shell.CreateShortcut($shortcutPath)
+            $sc.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+            $sc.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+            $sc.WorkingDirectory = Split-Path -Parent $PSCommandPath
+            $sc.IconLocation = "$env:SystemRoot\System32\DisplaySwitch.exe,0"
+        }
+        $sc.Description = "Toggle ${WideWidth}x${WideHeight} <-> ${NarrowWidth}x${NarrowHeight}"
         $sc.Save()
     } catch {}
 }
 
-function Get-CurrentResolution {
-    Add-Type -AssemblyName System.Windows.Forms
-    $screen = [System.Windows.Forms.Screen]::PrimaryScreen
-    return @{ Width = $screen.Bounds.Width; Height = $screen.Bounds.Height }
-}
-
 function Switch-Resolution {
-    $res = Get-CurrentResolution
-    $targetWidth = 2560
-    $targetHeight = 1440
-    if ($res.Width -eq 2560 -and $res.Height -eq 1440) {
-        $targetWidth = 5120; $targetHeight = 1440
-    } elseif ($res.Width -eq 5120 -and $res.Height -eq 1440) {
-        $targetWidth = 2560; $targetHeight = 1440
+    $cur = Get-CurrentMode
+
+    # Anything that is not the wide mode goes wide; the wide mode goes narrow.
+    if ($cur.dmPelsWidth -eq $WideWidth -and $cur.dmPelsHeight -eq $WideHeight) {
+        $tw = $NarrowWidth; $th = $NarrowHeight
+    } else {
+        $tw = $WideWidth; $th = $WideHeight
     }
 
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "cmd.exe"
-    $psi.Arguments = "/c `"$nircmdPath`" setdisplay $targetWidth $targetHeight 32"
-    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-    $psi.CreateNoWindow = $true
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
+    $modes = Get-ModesFor $tw $th
+    if ($modes.Count -eq 0) {
+        Show-Msg "Display mode ${tw}x${th} is not available on this monitor.`n`nCurrent: $($cur.dmPelsWidth)x$($cur.dmPelsHeight) @ $($cur.dmDisplayFrequency)Hz"
+        return $false
+    }
 
-    $p = New-Object System.Diagnostics.Process
-    $p.StartInfo = $psi
-    $null = $p.Start()
-    $null = $p.StandardOutput.ReadToEnd()
-    $null = $p.StandardError.ReadToEnd()
-    $p.WaitForExit()
-    $exit = $p.ExitCode
-    $p.Close()
-    return ($exit -eq 0)
+    # Keep the refresh rate the user is already on if the target supports it,
+    # otherwise take the highest the target offers.
+    $pick = $modes | Where-Object { $_.dmDisplayFrequency -eq $cur.dmDisplayFrequency } | Select-Object -First 1
+    if (-not $pick) { $pick = $modes | Sort-Object dmDisplayFrequency -Descending | Select-Object -First 1 }
+
+    $pick.dmFields = $DM_BITSPERPEL -bor $DM_PELSWIDTH -bor $DM_PELSHEIGHT -bor $DM_DISPLAYFREQUENCY
+
+    if ([Disp]::ChangeDisplaySettings([ref]$pick, $CDS_TEST) -ne 0) {
+        Show-Msg "The display driver rejected ${tw}x${th} @ $($pick.dmDisplayFrequency)Hz. Nothing was changed."
+        return $false
+    }
+
+    $rc = [Disp]::ChangeDisplaySettings([ref]$pick, $CDS_UPDATEREGISTRY)
+    if ($rc -ne 0) {
+        Show-Msg "Failed to change resolution to ${tw}x${th} (code $rc)."
+        return $false
+    }
+    return $true
 }
 
 # Main
 if ($SetupOnly) {
-    if (-not (Ensure-NirCmd)) {
-        try {
-            Add-Type -AssemblyName PresentationFramework
-            [System.Windows.MessageBox]::Show("Failed to download NirCmd. Please visit https://www.nirsoft.net/utils/nircmd.html and place nircmd.exe in $UserDataDir","Dota2 Resolution Switcher") | Out-Null
-        } catch {
-            Write-Host "Failed to download NirCmd. Please download manually: https://www.nirsoft.net/utils/nircmd.html" -ForegroundColor Red
-            Write-Host "Place nircmd.exe in: $UserDataDir" -ForegroundColor Yellow
-        }
-        exit 1
-    }
     Create-DesktopShortcut
-    try {
-        Add-Type -AssemblyName PresentationFramework
-        [System.Windows.MessageBox]::Show("Setup complete. A desktop shortcut was created (if possible).","Dota2 Resolution Switcher") | Out-Null
-    } catch {
-        Write-Host "Setup complete. A desktop shortcut was created (if possible)." -ForegroundColor Green
-    }
+    Show-Msg "Setup complete. A desktop shortcut was created (if possible)."
     exit 0
 }
 
-if (-not (Test-Path $nircmdPath)) {
-    if (-not (Ensure-NirCmd)) {
-        # Last resort message box for non-technical users
-        Add-Type -AssemblyName PresentationFramework
-        [System.Windows.MessageBox]::Show("Failed to download NirCmd. Please visit https://www.nirsoft.net/utils/nircmd.html and place nircmd.exe in $UserDataDir","Dota2 Resolution Switcher") | Out-Null
-        exit 1
-    } else {
-        Create-DesktopShortcut
-    }
-}
-
-# Toggle resolution silently
-$ok = Switch-Resolution
-if (-not $ok) {
-    # Brief message then exit
+# First run on a machine: drop a shortcut on the desktop, once.
+$marker = Join-Path $env:LOCALAPPDATA "$AppName\.shortcut-created"
+if (-not (Test-Path $marker)) {
+    Create-DesktopShortcut
     try {
-        Add-Type -AssemblyName PresentationFramework
-        [System.Windows.MessageBox]::Show("Failed to change resolution. Try running as Administrator.","Dota2 Resolution Switcher") | Out-Null
+        $null = New-Item -ItemType Directory -Force -Path (Split-Path -Parent $marker) -ErrorAction SilentlyContinue
+        Set-Content -Path $marker -Value (Get-Date -Format o) -ErrorAction SilentlyContinue
     } catch {}
 }
+
+if (-not (Switch-Resolution)) { exit 1 }
 exit 0

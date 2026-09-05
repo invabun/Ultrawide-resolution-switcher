@@ -1,22 +1,27 @@
 QUICK START GUIDE
 ==================
 
-IMPORTANT: Which file to run?
-------------------------------
-✅ ALWAYS double-click: switch_resolution.bat
-❌ DO NOT double-click: .ps1 files (they will open as text files)
+As of v2.0 there is NO setup step. Nothing gets downloaded.
 
-Step 1: Setup (First time only)
--------------------------------
-Double-click "setup.bat" - it will download NirCmd automatically
+Which file to run?
+------------------
+Double-click either one:
+  - dist\Dota2ResolutionSwitcher.exe     (recommended)
+  - switch_resolution.bat                (runs the script directly)
 
-Step 2: Use it
---------------
-Double-click "switch_resolution.bat" to switch resolutions!
+Do NOT double-click .ps1 files - they open as text instead of running.
 
-That's it! The window will close automatically.
+Use it
+------
+Double-click to toggle 5120x1440 <-> 2560x1440.
+The window closes automatically. Your refresh rate is kept.
+
+Stuck at 60Hz after a driver update?
+------------------------------------
+Open PowerShell in this folder and run:
+  .\SetRefreshRate.ps1 -List
+  .\SetRefreshRate.ps1 -Hz 165
 
 Need help?
 ----------
 See README.md for detailed instructions.
-
