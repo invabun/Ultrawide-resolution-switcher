@@ -1,35 +1,35 @@
 # File Structure
 
-## Essential Files (Required for Distribution)
+The tool has **no external dependencies**. Nothing is downloaded at runtime.
 
-These files are **required** for the tool to work:
+## Essential Files
 
-1. **`switch_resolution.bat`** - Main launcher (double-click this to switch resolution)
-2. **`switch_resolution_nircmd.ps1`** - PowerShell script that performs the resolution switch
-3. **`nircmd.exe`** - NirCmd utility (required, can be downloaded via setup script)
+1. **`Dota2ResolutionSwitcher.ps1`** - the whole tool. Reads and sets the
+   display mode through the Win32 API. This is also the source the EXE is
+   built from.
+2. **`switch_resolution.bat`** - double-click launcher for the script, for
+   people who would rather not run a `.ps1` directly.
+
+Either one on its own is enough. Or just grab the prebuilt EXE.
 
 ## Optional Files
 
-1. **`setup_nircmd.ps1`** - Automatic setup script to download NirCmd (convenient but not required if you already have nircmd.exe)
-2. **`README.md`** - Documentation (helpful for users)
-
-## For GitHub Distribution
-
-**Minimum files needed:**
-- `switch_resolution.bat`
-- `switch_resolution_nircmd.ps1`
-- `setup_nircmd.ps1` (so users can auto-download nircmd.exe)
-- `README.md`
-- `.gitignore`
-
-**Note:** `nircmd.exe` should NOT be included in the repository (users download it via setup script or manually). Add it to `.gitignore` if it exists.
+1. **`SetRefreshRate.ps1`** - list or set the refresh rate at the current
+   resolution. Useful after a driver update silently drops you to 60Hz.
+2. **`build_exe.ps1`** - rebuilds `dist/Dota2ResolutionSwitcher.exe` via PS2EXE.
 
 ## Quick Start for New Users
 
-1. Clone/download repository
-2. Run `setup_nircmd.ps1` (downloads nircmd.exe automatically)
-3. Use `switch_resolution.bat` to switch resolutions
+1. Download the EXE from Releases, **or** clone the repo
+2. Double-click the EXE (or `switch_resolution.bat`)
 
-That's it! Only 3 essential files needed (after setup).
+There is no setup step.
 
+---
 
+### Removed in v2.0
+
+`nircmd.exe`, `nircmdc.exe`, `NirCmd.chm`, `setup.bat`, `setup_nircmd.ps1` and
+`switch_resolution_nircmd.ps1` are gone. v1.x shelled out to NirCmd to change
+the resolution; v2.0 calls the Win32 display API directly, so the download step
+and the bundled binaries are no longer needed. They remain in git history.

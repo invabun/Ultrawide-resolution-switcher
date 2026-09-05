@@ -60,6 +60,9 @@ No scripts. No folders. One file.
 - 🎮 Designed for **Dota 2** ultrawide players
 - 🔇 Silent — no console windows
 - 🖥️ Portable — single EXE, no install
+- 📦 **Zero dependencies** — no NirCmd, nothing to download
+- 🔍 **Works at any display scaling** (100% / 125% / 150%)
+- 🔄 **Keeps your refresh rate** when switching
 - ⭐ Auto creates desktop shortcut on first run
 
 ---
@@ -73,6 +76,8 @@ No scripts. No folders. One file.
 
 ## 🛠️ Troubleshooting
 
+- ❗ **"It switches one way but won't switch back"** — fixed in **v2.0**.
+  If you are on v1.x, upgrade. See the changelog below for what was wrong.
 - ❗ If switching fails:  
   Right-click the EXE → **Run as Administrator**
 - ❗ On work/school PCs:  
@@ -96,25 +101,41 @@ Nothing else is left behind.
 ## ⚙️ How It Works (Brief)
 
 On first run:
-- Downloads **NirCmd** (from NirSoft) into your local app data folder
 - Creates a desktop shortcut
 
 On every run:
-- Calls NirCmd to change screen resolution
+- Reads the current mode with `EnumDisplaySettings`
+- Applies the other mode with `ChangeDisplaySettings`
 - Exits immediately
 
-No background process.
+No background process, no downloads, no external tools.
+
+Two details worth knowing:
+- The current refresh rate is **kept** across the switch when the target
+  resolution supports it, otherwise the highest available rate is used.
+- The new mode is validated with `CDS_TEST` before it is applied, so an
+  unsupported mode aborts cleanly instead of blanking your screen.
+
+---
+
+## 🖱️ Bonus: `SetRefreshRate.ps1`
+
+A driver update will happily reset your refresh rate to 60Hz and never mention
+it. On a 165Hz panel that costs you far more than the resolution does.
+
+```powershell
+.\SetRefreshRate.ps1 -List      # what this resolution supports
+.\SetRefreshRate.ps1 -Hz 165    # apply it, and persist it across reboots
+```
 
 ---
 
 ## 🙏 Credits
 
-- Resolution switching powered by **NirCmd** by NirSoft  
-  https://www.nirsoft.net/utils/nircmd.html  
 - EXE packaging via **PS2EXE**
 
-NirCmd is downloaded from the official site on first run.  
-It is not redistributed in this repo.
+As of v2.0 **NirCmd is no longer used or required** — resolution switching is
+done through the Win32 display API directly.
 
 ---
 
@@ -135,6 +156,33 @@ If this helps you, feel free to star the repo or share it with other ultrawide D
 ---
 
 ## 📝 Changelog
+
+### v2.0
+**Fixes the "switches one way but never switches back" bug.**
+
+v1.x read the current resolution with `System.Windows.Forms.Screen.Bounds`,
+which returns **DPI-scaled logical pixels**, not real ones. With Windows
+display scaling at 125%, a real 5120x1440 desktop reports as **4096x1152** —
+so neither branch of the toggle ever matched and every run fell through to the
+`2560x1440` default:
+
+| Actual | v1.x saw | v1.x switched to | Result |
+|---|---|---|---|
+| 5120x1440 | 4096x1152 | 2560x1440 | worked, looked fine |
+| 2560x1440 | 2048x1152 | 2560x1440 | **set to what it already was — nothing happened** |
+
+Scaling is commonly reset to 125% by a GPU driver update, which is why this
+tends to break suddenly on a setup that worked for months.
+
+- Resolution is now read and written with `EnumDisplaySettings` /
+  `ChangeDisplaySettings`, which are unaffected by DPI scaling
+- **NirCmd dependency removed entirely**
+- New mode is validated with `CDS_TEST` before being applied
+- Changes persist via `CDS_UPDATEREGISTRY` (v1.x changes were lost on reboot)
+- Current refresh rate is preserved across the switch
+- Clear message when a resolution simply is not available, instead of a
+  silent no-op
+- Added `SetRefreshRate.ps1`
 
 ### v1.0
 - First release

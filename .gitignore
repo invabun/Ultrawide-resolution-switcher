@@ -1,0 +1,3 @@
+# PS2EXE is downloaded on demand by build_exe.ps1, never committed
+ps2exe.ps1
+nircmd.zip
